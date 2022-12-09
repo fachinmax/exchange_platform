@@ -1,4 +1,3 @@
-from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .forms import Order, Convert
@@ -117,7 +116,7 @@ def all_offers(request):
         all_offers = db.orders.find().sort([('user', 1), ('type_offer', 1)])
         # converto l'oggetto BSON in JSON
         all_offers = json.loads(json_util.dumps(all_offers))
-        response = all_offers
+        response = {'OK': all_offers}
     return JsonResponse(response, safe=False)
 
 
@@ -156,14 +155,13 @@ def lose_gain(request):
                     total_gain_lose_for_user[user] = dict({'bit': bit, 'fiat': -fiat})
                 else:
                     total_gain_lose_for_user[user] = dict({'bit': -bit, 'fiat': fiat})
-        response = total_gain_lose_for_user
+        response = {'OK': total_gain_lose_for_user}
     return JsonResponse(response, safe=False)
 
 
 @csrf_exempt
 def fiat_bit(request):
-    '''Funzione che converte una certa quantià di fiat in bitcoin nel account dell'utente autenticato. Per promuovere lo scmabio con gli
-    altri utenti viene applicata una commissine di 2 fiat'''
+    '''Funzione che converte una certa quantià di fiat in bitcoin nel account dell'utente autenticato.'''
     if request.method != 'POST':
         response = {'Error': 'Request type is wrong.'}
     elif str(request.user) == 'AnonymousUser':
