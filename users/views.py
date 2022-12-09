@@ -1,4 +1,3 @@
-from django.shortcuts import render
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import login, authenticate, logout
@@ -62,14 +61,14 @@ def user_logout(request):
 
 
 @csrf_exempt
-def charge_account(request):
+def top_up_account(request):
     '''Funzione che ricarica l'account'''
     if request.method == 'POST' and str(request.user) != 'AnonymousUser':
         form = Charge(request.POST)
         if form.is_valid():
             fiat = form.cleaned_data.get('fiat')
-            db.users.update_one({'user': str(request.user)}, {'$set': {'fiat_balance': fiat}})
-            response = {'OK': 'Balance update.'}
+            db.users.update_one({'user': str(request.user)}, {'$inc': {'fiat_balance': fiat}})
+            response = {'OK': 'Balance top up.'}
         else:
             response = {'Error': 'Missing field.'}
     else:
@@ -79,14 +78,17 @@ def charge_account(request):
 
 def get_users(request):
     '''Funzione che ritorna una lista con i nomi di tutti gli utenti registrati'''
-    if request.method == 'GET':
+    if request.method != 'GET':
+        response = {'Error': 'Request type is wrong.'}
+    else:
         total_users = db.users.find({}, {'user': 1})
         # converto l'oggetto BSON in JSON
         total_users = json.loads(json_util.dumps(total_users))
         list_users = list()
         for user in total_users:
             list_users.append(user.get('user'))
-        return JsonResponse(list_users, safe=False)
+        response = {'OK': list_users}
+    return JsonResponse(response, safe=False)
 
 
 def get_user_account(request):
@@ -100,7 +102,7 @@ def get_user_account(request):
         # converto l'oggetto BSON in JSON
         user = json.loads(json_util.dumps(user))[0]
         del user['_id']
-        response = user
+        response = {'OK': user}
     return JsonResponse(response, safe=False)
 
 
