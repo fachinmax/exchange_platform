@@ -8,36 +8,107 @@ import json
 
 
 # Functions
-def check_offers(new_order, bit, fiat, typology):
+def check_offers(new_order):
     '''Funzione che riceve in ingresso un offerta di acquisto/vendita a una certa quantità di bit e moneta fiat, controlla se ci sono delle
-    posizioni analoghe aperte e chiude le eventuali posizoni aggiornando i conti degli utenti'''
+    posizioni aperte, chiude le eventuali corrispondenti posizoni aggiornando i conti degli utenti e aggiungengo ai documenti il guadagno
+    o perdita subita.'''
     # nel caso non ci siano alcuni documenti che rispettano le caratteristiche indicate allora il puntatore del database non punta ad alcun
     # documento e genera un errore. In questo modo se viene generato un errore non faccio nulla altrimenti chiudo le due posizioni di vendita
     # e di acquisto e aggiorno i conti degli utenti
-    # imposto le variabili per svolgere le operazioni
+    # imposto le variabili per svolgere le operazioni:
+    # - quantità di bit inerente al ultima offerta pubblicata
+    bit = new_order.get('amount_bit').get('available')
+    # - quantità di fiat inerente al ultima offerta pubblicata
+    fiat = new_order.get('amount_fiat')
+    # - tipologia di offerta pubblicata
+    typology = new_order.get('type_offer')
+    # - nome dell'utente
+    user = new_order.get('user')
     if typology == 'buy':
-        type_offer = 'sell'
-        bit_old_order = -bit
-        bit_new_order = bit
-        fiat_old_order = fiat
-        fiat_new_order = -fiat
+        query = {'$and': [{'amount_fiat': {'$lte': fiat}}, {'type_offer': 'sell'}, {'open_operation': True}]}
+        total_orders = db.orders.find(query).sort('amount_fiat', 1)
+        # imposto le variabili per aggiornare la quantità di fiat e bit dei account degli utenti a cui combaciano le offerte
+        account_user_increment_bit = user
+        if db.orders.count_documents(query) > 0:
+            account_user_increment_fiat = total_orders[0].get('user')
     else:
-        type_offer = 'buy'
-        bit_old_order = bit
-        bit_new_order = -bit
-        fiat_old_order = -fiat
-        fiat_new_order = fiat
-    try:
-        # prelevo i dati di eventuali offerte di vendita
-        old_order = db.orders.find({'$and': [{'amount_bit': bit}, {'type_offer': type_offer}, {'open_operation': True}]}).sort('date', 1)[0]
-        # chiudo le posizioni di acquisto e vendita
-        db.users.update_one({'user': old_order.get('user')}, {'$inc': {'bit_balance': bit_old_order, 'fiat_balance': fiat_old_order}})
-        db.users.update_one({'user': new_order.get('user')}, {'$inc': {'bit_balance': bit_new_order, 'fiat_balance': fiat_new_order}})
-        # aggiorno i bilanci degli utenti
-        db.orders.update_one(old_order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()}})
-        db.orders.update_one(new_order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()}})
-    except IndexError:
-        pass
+        query = {'$and': [{'amount_fiat': {'$gte': fiat}}, {'type_offer': 'buy'}, {'open_operation': True}]}
+        total_orders = db.orders.find(query).sort('amount_fiat', -1)
+        # imposto le variabili per aggiornare la quantità di fiat e bit dei account degli utenti a cui combaciano le offerte
+        account_user_increment_fiat = user
+        if db.orders.count_documents(query) > 0:
+            account_user_increment_bit = total_orders[0].get('user')
+    # controllo tutte le posizioni di vendita/acquisto e chiudo quelle che combaciano con l'offerta appena pubblicata
+    for order in total_orders:
+        # inizializzo le variabili che mi permettono di memorizzare nel documento la quantità guadagnata/persa di bit e fiat
+        # se è un ordine di acquisto allora guadagno bit e perdo moneta fiat
+        if typology == 'buy':
+            old_order_gain_bit = -bit
+            old_order_gain_fiat = bit * order.get('amount_fiat')
+            new_order_gain_bit = bit
+            new_order_gain_fiat = -bit * order.get('amount_fiat')
+        # se è un ordine di vendita allora perdo bit e guadagno moneta fiat
+        else:
+            old_order_gain_bit = bit
+            old_order_gain_fiat = -bit * order.get('amount_fiat')
+            new_order_gain_bit = -bit
+            new_order_gain_fiat = bit * order.get('amount_fiat')
+        if order.get('amount_bit').get('available') == bit:
+            # aggiorno gli ordini: chiudendoli o decrementando la quantità pubblicata
+            db.orders.update_one(order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()},
+                                         '$inc': {'amount_bit.available': -bit, 'amount_bit.no_available': bit,
+                                                  'gain_bit': old_order_gain_bit, 'gain_fiat': old_order_gain_fiat}})
+            db.orders.update_one(new_order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()},
+                                             '$inc': {'amount_bit.available': -bit, 'amount_bit.no_available': bit,
+                                                      'gain_bit': new_order_gain_bit, 'gain_fiat': new_order_gain_fiat}})
+            # aggirno gli account degli utenti incrementando/decrementando la quantità di fiat/bit
+            db.users.update_one({'user': account_user_increment_bit}, {'$inc': {'bit_balance': bit,
+                                                                                'fiat_balance': -order.get('amount_fiat')*bit}})
+            db.users.update_one({'user': account_user_increment_fiat}, {'$inc': {'bit_balance': -bit,
+                                                                                 'fiat_balance': order.get('amount_fiat')*bit}})
+            break
+        elif order.get('amount_bit').get('available') > bit:
+            # aggiorno gli ordini: chiudendoli o decrementando la quantità pubblicata
+            db.orders.update_one(order, {'$inc': {'amount_bit.available': -bit, 'amount_bit.no_available': bit,
+                                                  'gain_bit': old_order_gain_bit, 'gain_fiat': old_order_gain_fiat}})
+            db.orders.update_one(new_order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()},
+                                             '$inc': {'amount_bit.available': -bit, 'amount_bit.no_available': bit,
+                                                      'gain_bit': new_order_gain_bit, 'gain_fiat': new_order_gain_fiat}})
+            # aggirno gli account degli utenti incrementando/decrementando la quantità di fiat/bit
+            db.users.update_one({'user': account_user_increment_bit}, {'$inc': {'bit_balance': bit,
+                                                                                'fiat_balance': -order.get('amount_fiat')*bit}})
+            db.users.update_one({'user': account_user_increment_fiat}, {'$inc': {'bit_balance': -bit,
+                                                                                 'fiat_balance': order.get('amount_fiat')*bit}})
+            break
+        elif order.get('amount_bit').get('available') < bit:
+            # modifico le variabili percedentemente create
+            if typology == 'buy':
+                old_order_gain_bit = -order.get('amount_bit').get('available')
+                old_order_gain_fiat = order.get('amount_bit').get('available') * order.get('amount_fiat')
+                new_order_gain_bit = order.get('amount_bit').get('available')
+                new_order_gain_fiat = -order.get('amount_bit').get('available') * order.get('amount_fiat')
+            else:
+                old_order_gain_bit = order.get('amount_bit').get('available')
+                old_order_gain_fiat = -order.get('amount_bit').get('available') * order.get('amount_fiat')
+                new_order_gain_bit = -order.get('amount_bit').get('available')
+                new_order_gain_fiat = order.get('amount_bit').get('available') * order.get('amount_fiat')
+            # aggiorno gli ordini: chiudendoli o decrementando la quantità pubblicata
+            db.orders.update_one(order, {'$set': {'open_operation': False, 'close_operation_date': datetime.now()},
+                                         '$inc': {'amount_bit.available': -order.get('amount_bit').get('available'),
+                                                  'amount_bit.no_available': order.get('amount_bit').get('available'),
+                                                  'gain_bit': old_order_gain_bit, 'gain_fiat': old_order_gain_fiat}})
+            db.orders.update_one(new_order, {'$inc': {'amount_bit.available': -order.get('amount_bit').get('available'),
+                                                      'amount_bit.no_available': order.get('amount_bit').get('available'),
+                                                      'gain_bit': new_order_gain_bit, 'gain_fiat': new_order_gain_fiat}})
+            # aggirno gli account degli utenti incrementando/decrementando la quantità di fiat/bit
+            db.users.update_one({'user': account_user_increment_bit}, {'$inc': {'bit_balance': order.get('amount_bit').get('available'),
+                                                                                'fiat_balance': -order.get('amount_fiat')*order.get('amount_bit').get('available')}})
+            db.users.update_one({'user': account_user_increment_fiat}, {'$inc': {'bit_balance': -order.get('amount_bit').get('available'),
+                                                                                 'fiat_balance': order.get('amount_fiat')*order.get('amount_bit').get('available')}})
+            # aggiorno la quantità di bit che è stata acquistata/venduta in modo che al ciclo successivo i dati sono corretti
+            bit -= order.get('amount_bit').get('available')
+            new_order['amount_bit']['available'] -= order.get('amount_bit').get('available')
+            new_order['amount_bit']['no_available'] += order.get('amount_bit').get('available')
 
 
 # Create your views here.
@@ -52,6 +123,7 @@ def pubblic_offert(request):
     else:
         form = Order(request.POST)
         if form.is_valid():
+            # istanzio le variabili che mi servono successivamente
             typology = form.cleaned_data.get('type_offer')
             bit = form.cleaned_data.get('amount_bit')
             fiat = form.cleaned_data.get('amount_fiat')
@@ -59,40 +131,43 @@ def pubblic_offert(request):
                 # creo l'offerta da pubblicare
                 offer = {'user': str(request.user),
                         'type_offer': typology,
-                        'amount_bit': bit,
+                        'amount_bit': {'available': bit, 'no_available': 0},
                         'amount_fiat': fiat,
                         'pubbliced_date': datetime.now(),
                         'open_operation': True,
                         'close_operation_date': None}
-                # inizializzo le variabili per poter controllare se l'utente può svolgere delle operazioni di vendita/acquisto
-                if typology == 'sell':
-                    type_balance = 'bit_balance'
-                    type_amount_coin = '$amount_bit'
-                else:
-                    type_balance = 'fiat_balance'
-                    type_amount_coin = '$amount_fiat'
                 # verifico se l'utente ha abbastanza bitcoin/fiat per poter pubblicare un offerta di vendita/acquisto ottenendo la quantità
                 # attuale di bitcoin/fiat dell'utente
-                balance_user = db.users.find({'user': str(request.user)}, {type_balance: 1})[0].get(type_balance)
-                # ottengo la quantità di bit/fiat utilizzata per pubblicare le varie offerte di vendita/acquisto ancora aperte
-                offers = db.orders.aggregate([{'$match': {'user': str(request.user), 'type_offer': typology, 'open_operation': True}},
-                                                    {'$group': {'_id': '$user', 'total': {'$sum': type_amount_coin}}}])
-                try:
-                    sell_offers = list(offers)[0]
-                except IndexError:
-                    # gestisco l'errore di indice nel caso non ci sono posizioni aperte
-                    sell_offers = {'total': 0}
+                # inizializzo una variabile dove memorizzo la quantità spesa dall'utente per pubblicare le offerte non ancora chiuse
+                cost_operation_open = 0
+                # ottengo la quantità di fiat utilizzata per pubblicare le varie offerte di acquisto ancora aperte
+                if typology == 'buy':
+                    balance_user = db.users.find({'user': str(request.user)}, {'fiat_balance': 1})[0].get('fiat_balance')
+                    offers = db.orders.find({'user': str(request.user), 'type_offer': typology, 'open_operation': True},
+                                            {'amount_fiat': 1, 'amount_bit.available': 1})
+                    for off in offers:
+                        cost_operation_open += off.get('amount_fiat') * off.get('amount_bit').get('available')
+                # ottengo la quantità di bit utilizzata per pubblicare le varie offerte di acquisto ancora aperte
+                else:
+                    balance_user = db.users.find({'user': str(request.user)}, {'bit_balance': 1})[0].get('bit_balance')
+                    results = db.orders.aggregate([{'$match': {'user': str(request.user), 'type_offer': typology, 'open_operation': True}},
+                                                    {'$group': {'_id': '$user', 'total': {'$sum': '$amount_bit.available'}}}])
+                    try:
+                        cost_operation_open = list(results)[0].get('total')
+                    except IndexError:
+                        # gestisco l'errore di indice nel caso non ci sono posizioni aperte
+                        cost_operation_open = 0
                 # se l'utente ha abbastanza bit/fiat pubblico l'offerta
-                if typology == 'sell' and balance_user >= sell_offers.get('total')+bit:
+                if typology == 'sell' and balance_user >= cost_operation_open + bit:
                     db.orders.insert_one(offer)
                     response = {'OK': 'Pubbliced.'}
                     # cerco se ci sono delle offerte di acquisto che combaciano all'offerta di vendita
-                    check_offers(offer, bit, fiat, typology)
-                elif typology == 'buy' and balance_user >= sell_offers.get('total') + fiat:
+                    check_offers(offer)
+                elif typology == 'buy' and balance_user >= cost_operation_open + (fiat * bit):
                     db.orders.insert_one(offer)
                     response = {'OK': 'Pubbliced.'}
                     # cerco se ci sono delle offerte di vendita che combaciano all'offerta di acquisto
-                    check_offers(offer, bit, fiat, typology)
+                    check_offers(offer)
                 else:
                     if typology == 'buy':
                         response = {'Error': "You haven't much fiat."}
@@ -127,34 +202,29 @@ def lose_gain(request):
     elif str(request.user) == 'AnonymousUser':
         response = {'Error': 'No one is sing in.'}
     else:
-        # prendo dal database tutte le informazioni che mi servono
-        total_offer_closed = db.orders.aggregate([{'$match': {'open_operation': False}},
-                                         {'$group': {
-                                             '_id': {'user': '$user', 'type_offer': '$type_offer'},
-                                             'bit': {'$sum': '$amount_bit'},
-                                             'fiat': {'$sum': '$amount_fiat'}
-                                        }}])
+        # prelevo dal database tutti gli ordini eseguiti
+        total_offer_closed = db.orders.find({'gain_bit': {'$exists': True}})
         # converto l'oggetto BSON in JSON
         total_offer_closed = json.loads(json_util.dumps(total_offer_closed))
         total_gain_lose_for_user = dict()
         # controllo tutte le informazioni incrementando/decementando in base al tipo di offerta la quantità di bit e fiat
         for offer in total_offer_closed:
-            user = offer.get('_id').get('user')
-            type_offer = offer.get('_id').get('type_offer')
-            bit = offer.get('bit')
-            fiat = offer.get('fiat')
+            user = offer.get('user')
+            type_offer = offer.get('type_offer')
+            bit = offer.get('gain_bit')
+            fiat = offer.get('gain_fiat')
             if user in total_gain_lose_for_user:
                 if type_offer == 'buy':
                     total_gain_lose_for_user[user]['bit'] += bit
-                    total_gain_lose_for_user[user]['fiat'] -= fiat
+                    total_gain_lose_for_user[user]['fiat'] += fiat
                 else:
-                    total_gain_lose_for_user[user]['bit'] -= bit
+                    total_gain_lose_for_user[user]['bit'] += bit
                     total_gain_lose_for_user[user]['fiat'] += fiat
             else:
                 if type_offer == 'buy':
-                    total_gain_lose_for_user[user] = dict({'bit': bit, 'fiat': -fiat})
+                    total_gain_lose_for_user[user] = dict({'bit': bit, 'fiat': fiat})
                 else:
-                    total_gain_lose_for_user[user] = dict({'bit': -bit, 'fiat': fiat})
+                    total_gain_lose_for_user[user] = dict({'bit': bit, 'fiat': fiat})
         response = {'OK': total_gain_lose_for_user}
     return JsonResponse(response, safe=False)
 
