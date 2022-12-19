@@ -9,3 +9,7 @@ class Order(forms.Form):
 
 class Convert(forms.Form):
     fiat = forms.IntegerField()
+
+
+class OrderId(forms.Form):
+    id_order = forms.CharField()

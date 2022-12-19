@@ -1,10 +1,11 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .forms import Order, Convert
+from .forms import Order, Convert, OrderId
 from pymongo import MongoClient
 from datetime import datetime
 from bson import json_util
 import json
+from bson.objectid import ObjectId
 
 
 # Functions
@@ -253,6 +254,38 @@ def fiat_bit(request):
                 response = {'Error': "You don't have enough coins."}
         else:
             response = {'Error': 'Compile both field.'}
+    return JsonResponse(response, safe=False)
+
+
+@csrf_exempt
+def delete_order(request):
+    '''Funzione che cancella un ordine ancora aperto.'''
+    if request.method != 'POST':
+        response = {'Error': 'Request type is wrong.'}
+    elif str(request.user) == 'AnonymousUser':
+        response = {'Error': 'No one is sing in.'}
+    else:
+        form = OrderId(request.POST)
+        if form.is_valid():
+            id = form.cleaned_data.get('id_order')
+            string_object_order = ObjectId(id)
+            amount_order = db.orders.count_documents({'_id': string_object_order})
+            if amount_order > 0:
+                order = db.orders.find({'_id': string_object_order})[0]
+                if order.get('open_operation') == True:
+                    if order.get('user') == str(request.user):
+                        db.orders.update_one({'_id': string_object_order}, {'$set': {'amount_bit.available': 0,
+                                                                                'open_operation': False,
+                                                                                'close_operation_date': datetime.now()}})
+                        response = {'OK': 'Your order is closed.'}
+                    else:
+                        response = {'Error': "That isn't your order."}
+                else:
+                    response = {'Error': "Order already closed."}
+            else:
+                response = {'Error': "Order doesn't exist."}
+        else:
+            response = {'Error': 'Compile the field.'}
     return JsonResponse(response, safe=False)
 
 
