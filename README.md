@@ -18,6 +18,7 @@ necessaria di bitcoin o fiat in base se l'offerta è di vendita o acquisto
 - permette di ottenere un oggetto JSON con la quantità di bitcoins e fiat persa o guadagnata da ogni utente
 - permette di ottenere un oggetto JSON con tutti gli utenti autenticati
 - permette di ottenere un oggetto JSON con la quantità di bitcoins e fiat attuale dell'utente autenticato
+- permette di cancellare un proprio ordine pubblicato sia di vendita sia di acquisto ancora aperto
 
 ## Funzionalità
 Ogni utente ha una quantità di bitcoins e di moneta fiat casuali date nel momento della creazine dell'account che possono utilizzarle per poter
